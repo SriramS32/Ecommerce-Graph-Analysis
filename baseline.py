@@ -1,60 +1,133 @@
-import pandas as pd
-import numpy as np
-import networkx as nx
-from tqdm import tqdm
-import sklearn
 import os
+import numpy as np
+import pandas as pd
+import networkx as nx
+from utils import *
+from math import floor
+from tqdm import tqdm
+from itertools import combinations
 
-from temporal import TemporalGraph
-from utils import create_frame
+# ratio of frames to use to initialize the adjacency matrix
+FRAME_RATIO = 0.8
 
-TG_FRAME_PATH = './data/tg_frames'
+def init_adjacency_matrix(dat, TG, bins, frame_ratio=0.8):
+    '''
+    Generate an initial probability distribution of customer purchases
+    as a C x P matrix
+    
+    Parameters:
+       dat: pd.DataFrame containing retail data
+       TG: temporal graph containing graph frames
+       bins: pd.DatetimeIndex, keys to TG.frames
+       frame_ratio: fraction of the bins to use
+    '''
 
+    adj = np.zeros((C,P))
+
+    # number of frames to use
+    num_frames = int(floor(len(bins) * 0.8))
+    for date in bins[:num_frames]:
+        date_key = str(date)
+        cur_graph = TG.get_frame(date_key)
+        for edge in cur_graph.edges:
+            cID, sCode = extract_codes(edge)
+
+            customer_idx, product_idx = node2idx[cID], node2idx[sCode]
+            adj[customer_idx, product_idx] += 1
+
+    return adj
+    
+def gen_transition(G, stockCodes, node2idx):
+    '''
+    Generate a P x P transition matrix from the current graph,
+    according to the following scheme:
+       T_ii = 1
+       T_ij = 
+          - if i,j purchased together by at least one customer:
+               # co-purchases / # purchases of item j
+          - otherwise: 1/P
+    
+    Parameters:
+       - G: a nx.Graph of the transactions in the current time frame
+       - stockCodes: a list of customerIDs
+       - node2idx
+    '''
+
+    P = len(stockCodes)
+    initial_prob = 1.0 / P
+    T = np.ones((P,P)) * initial_prob
+
+    # map customerID -> purchased items
+    customer_map = dict()
+    # map purchased item -> customerIDs of purchased items
+    product_map = dict()
+
+    for edge in G.edges:
+        cID, sCode = extract_codes(edge)
+        if cID not in customer_map:
+            customer_map[cID] = set()
+        if sCode not in product_map:
+            product_map[sCode] = set()
+        customer_map[cID].add(sCode)
+        product_map[sCode].add(cID)
+
+    mapped_pairs = set()
+
+    for purchase_record in customer_map.values():
+        # every sorted combination of items
+        for itemA, itemB in combinations(purchase_record, r=2):
+            if (itemA, itemB) in mapped_pairs:
+                continue
+            mapped_pairs.add((itemA, itemB))
+            setA = product_map[itemA]
+            setB = product_map[itemB]
+            intersection = len(setA.intersection(setB))
+
+            probA = float(intersection) / len(setA)
+            probB = float(intersection) / len(setB)
+
+            idxA = node2idx[itemA]
+            idxB = node2idx[itemB]
+
+            T[idxA, idxB] = probB
+            T[idxB, idxA] = probA
+
+    for sCode in stockCodes:
+        # all diagonals are 1.0
+        idx = node2idx[sCode]
+        T[idx, idx] = 1.0
+
+    return T
+            
 if __name__ == '__main__':
-    dat = pd.read_csv('data/online_retail_II.csv', parse_dates=['InvoiceDate'])
-    dat = dat.dropna(subset=['StockCode', 'CustomerID'], how='any', axis=0)
-    dat = dat[~dat.StockCode.isin(['M', 'POST', 'D', 'DOT', 'CRUK', 'C2', 'BANK CHARGES', 'ADJUST', 'ADJUST2', 'TEST001'])]
+    dat = read_retail_csv()
 
     # date bins
     bins = pd.date_range(start=dat.InvoiceDate.min(), end=dat.InvoiceDate.max(), freq='W')
     # keep only stock code and description, sort by stock code
     duplicated = dat[['StockCode', 'Description']].drop_duplicates().sort_values('StockCode')
 
-    G = nx.MultiGraph()
-    # some stock codes have letters in them
-    edges = list(zip(dat.StockCode, dat.CustomerID.astype(int)))
-    for edge in edges:
-        G.add_edge(edge[0], edge[1])
+    # generate separate indexing system for customerIDs and stockCodes
+    customerIDs, stockCodes, node2idx = gen_indices(dat)
+    C = len(customerIDs)
+    P = len(stockCodes)
 
-    customerIDs = []
-    stockCodes = []
-    node2idx = dict()
+    TG = init_temporal_graph(dat, bins)
+    
+    print('Generating adjacency matrix...')
+    adj = init_adjacency_matrix(node2idx, TG, bins, frame_ratio=FRAME_RATIO)
+    normalize_rows(adj)
+    print('Done!')
 
-    for node in G.nodes:
-        if type(node) == str:
-            # we have a stock code
-            idx = len(stockCodes)
-            node2idx[node] = idx
-            stockCodes.append(node)
-        else:
-            # we have a customer ID
-            assert(type(node) == int)
-            idx = len(customerIDs)
-            node2idx[node] = idx
-            customerIDs.append(node)
+    num_frames = int(floor(len(bins) * FRAME_RATIO))
+    print('Taking walk through the weeks...')
+    # takes about 2 minutes on my computer
+    for date in tqdm(bins[num_frames:-1], dynamic_ncols=True):
+        date_key = str(date)
+        cur_graph = TG.get_frame(date_key)
+        T = gen_transition(cur_graph, stockCodes, node2idx)
+        adj = normalize_rows(np.matmul(adj, T))
+    print('Done!')
 
-    TG = TemporalGraph((customerIDs, stockCodes), None)
-
-    if os.path.isdir(TG_FRAME_PATH) and (len(os.listdir(TG_FRAME_PATH)) == (len(bins) - 1)):
-        TG.read_pickles(TG_FRAME_PATH)
-    else:
-
-        # this loop takes about 3 minutes
-        for i in tqdm(range(len(bins) - 1), dynamic_ncols=True):
-            start = bins[i]
-            end = bins[i+1]
-            bin_dat = dat[(dat.InvoiceDate >= start) & (dat.InvoiceDate < end)]
-            frame = create_frame(bin_dat)
-            TG.add_frame(start, frame)
-            
-    print('Done loading temporal graph frame')
+    predicted_purchases = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
+    # turns out, everyone's gonna buy birthday cards and christmas lights

@@ -20,8 +20,9 @@ class TemporalGraph:
     def read_gpickles(self, directory):
         for ind_path in os.listdir(directory):
             ind = os.path.basename(ind_path).split(".")[0]
-            self.frames[ind] = nx.read_gpickle(ind_path)
+            self.frames[ind] = nx.read_gpickle(os.path.join(directory, ind_path))
             
     def write_gpickles(self, directory):
         for ind, frame in self.frames.items():
             nx.write_gpickle(frame, os.path.join(directory, "%s.pkl" % ind))
+
