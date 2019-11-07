@@ -1,13 +1,13 @@
 import networkx as nx
 import os
 
-
 class TemporalGraph:
     
     def __init__(self, node_ordering, index):
         self.frames = {}
         self.index = index # save this as an accessor to which bins exist
-        self.node_ordering = node_ordering
+        #TODO: Implement consistent node ordering
+	self.node_ordering = node_ordering
     
     def add_frame(self, ind, frame):
         self.frames[ind] = frame
@@ -23,6 +23,8 @@ class TemporalGraph:
             self.frames[ind] = nx.read_gpickle(os.path.join(directory, ind_path))
             
     def write_gpickles(self, directory):
+        if not os.path.isdir(directory):
+            os.mkdir(directory)
+            
         for ind, frame in self.frames.items():
             nx.write_gpickle(frame, os.path.join(directory, "%s.pkl" % ind))
-
