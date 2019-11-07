@@ -6,7 +6,7 @@ class TemporalGraph:
     
     def __init__(self, node_ordering, index):
         self.frames = {}
-        self.index = index
+        self.index = index # save this as an accessor to which bins exist
         self.node_ordering = node_ordering
     
     def add_frame(self, ind, frame):
