@@ -7,14 +7,14 @@ from math import floor
 from tqdm import tqdm
 from itertools import combinations
 
-FRAME_RATIO = 0.8
+TRAIN_SPLIT = 0.8
 
 def gen_partial_graph(TG, bins, r=0.8):
     '''
     Generate a simple graph between customers and products
       - NOTE: does not take advantage of multigraph structure
     '''
-    num_frames = int(floor(len(bins) * FRAME_RATIO))
+    num_frames = int(floor(len(bins) * r))
     
     G = nx.Graph()
     
@@ -40,7 +40,7 @@ if __name__ == '__main__':
 
     TG = init_temporal_graph(dat, bins)
 
-    partial_graph = gen_partial_graph(TG, bins, FRAME_RATIO)
+    partial_graph = gen_partial_graph(TG, bins, TRAIN_SPLIT)
     pairs = []
     print('Generating customer/product pairs...')
     # takes about 11 seconds on my computer
@@ -53,12 +53,20 @@ if __name__ == '__main__':
             if not partial_graph.has_edge(cID, sc):
                 pairs.append((cID, sc))
     print('Done!')
-    probs = np.zeros((C,P))
-    preds = nx.resource_allocation_index(partial_graph, pairs)
+    adj = np.zeros((C,P))
+    probs = nx.preferential_attachment(partial_graph, pairs)
     print('Processing predictions...')
-    for u, v, p in tqdm(preds, dynamic_ncols=True):
+    # RAI takes about 12 minutes for me, 9,933,917 items w/ 0.8 ratio
+    # Preferential attachment takes < 1 minutes
+    for u, v, p in tqdm(probs, dynamic_ncols=True):
         i = node2idx[u]
         j = node2idx[v]
-        probs[i,j] = p
+        adj[i,j] = p
     print('Done!')
+
+    adj = normalize_rows(adj)
+    preds = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
+
+    final_prec = calc_prec(preds, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
+    print('Final accuracy = %.4f' % final_prec)
         

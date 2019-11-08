@@ -3,6 +3,7 @@ import numpy as np
 import networkx as nx
 import os
 from tqdm import tqdm
+from math import floor
 
 from temporal import TemporalGraph
 
@@ -148,3 +149,32 @@ def normalize_rows(A):
     # don't divide by 0!
     norm[norm == 0] = 1.0
     return A / norm
+
+def calc_prec(predictions, customerIDs, node2idx, TG, bins, ratio):
+    '''
+    Calculate a very coarse precision metric for precision.
+        We only consider 'valid' customers that bought at least 1 item:
+        A prediction is correct if the 1 predicted item
+        is in the total set of items purchased by the customers.
+        The metric is then # correct / # valid customers 
+    '''
+    customer_map = dict()
+    num_frames = int(floor(len(bins) * ratio))
+    for date in tqdm(bins[num_frames:-1]):
+        date_key = str(date)
+        cur_graph = TG.get_frame(date_key)
+        for cID in customerIDs:
+            if cur_graph.has_node(cID):
+                if cID not in customer_map:
+                    customer_map[cID] = set()
+                for sc in cur_graph.neighbors(cID):
+                    customer_map[cID].add(node2idx[sc])
+
+    total_purchased = len(customer_map)
+    correct = 0
+    for i, pred in enumerate(predictions):
+        cID = customerIDs[i]
+        if cID in customer_map and pred in customer_map[cID]:
+            correct += 1
+
+    return float(correct) / total_purchased

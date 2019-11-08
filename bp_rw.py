@@ -10,7 +10,8 @@ from tqdm import tqdm
 from itertools import combinations
 
 # ratio of frames to use to initialize the adjacency matrix
-FRAME_RATIO = 0.2
+FRAME_RATIO = 0.1
+TRAIN_SPLIT = 0.5
 
 def init_adjacency_matrix(dat, TG, bins, frame_ratio=0.8):
     '''
@@ -101,32 +102,6 @@ def gen_transition(G, stockCodes, node2idx):
 
     return T
 
-def calc_prec(predictions, customerIDs, node2idx, TG, bins):
-    '''
-    Calculate a very coarse precision metric for 
-    '''
-    customer_map = dict()
-    num_frames = int(floor(len(bins) * FRAME_RATIO))
-    for date in tqdm(bins[num_frames:-1]):
-        date_key = str(date)
-        cur_graph = TG.get_frame(date_key)
-        for cID in customerIDs:
-            if cur_graph.has_node(cID):
-                if cID not in customer_map:
-                    customer_map[cID] = set()
-                for sc in cur_graph.neighbors(cID):
-                    customer_map[cID].add(node2idx[sc])
-
-    total_purchased = len(customer_map)
-    correct = 0
-    for i, pred in enumerate(predictions):
-        cID = customerIDs[i]
-        if cID in customer_map and pred in customer_map[cID]:
-            correct += 1
-
-    return float(correct) / total_purchased
-    
-
 if __name__ == '__main__':
     dat = read_retail_csv()
 
@@ -148,9 +123,10 @@ if __name__ == '__main__':
     print('Done!')
 
     num_frames = int(floor(len(bins) * FRAME_RATIO))
+    train_limit = int(floor(len(bins) * TRAIN_SPLIT))
     print('Taking walk through the weeks...')
     # takes about 3 minutes for 50% of the frames
-    for date in tqdm(bins[num_frames:-1], dynamic_ncols=True):
+    for date in tqdm(bins[num_frames:train_limit], dynamic_ncols=True):
         date_key = str(date)
         cur_graph = TG.get_frame(date_key)
         T = gen_transition(cur_graph, stockCodes, node2idx)
@@ -163,8 +139,6 @@ if __name__ == '__main__':
     # now, calclulate precision!
     # scheme: (true positives / (true positive + true negative))
     print('Calculating precision...')
-    final_prec = calc_prec(predicted_purchases, customerIDs, node2idx, TG, bins)
+    final_prec = calc_prec(predicted_purchases, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
     print('Done!')
-    print('Final precision: %.4f' % final_prec)
-                
-                
+    print('Final precision: %.f' % final_prec)
