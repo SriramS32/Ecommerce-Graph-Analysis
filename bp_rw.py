@@ -1,11 +1,10 @@
 # Bipartite random walks for link prediction
-#
 
 import os
 import numpy as np
 import pandas as pd
 import networkx as nx
-from ..utils import *
+from utils import *
 from math import floor
 from tqdm import tqdm
 from itertools import combinations
