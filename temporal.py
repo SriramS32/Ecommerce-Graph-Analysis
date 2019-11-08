@@ -7,7 +7,7 @@ class TemporalGraph:
         self.frames = {}
         self.index = index # save this as an accessor to which bins exist
         #TODO: Implement consistent node ordering
-	self.node_ordering = node_ordering
+        self.node_ordering = node_ordering
     
     def add_frame(self, ind, frame):
         self.frames[ind] = frame

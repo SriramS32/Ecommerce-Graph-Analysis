@@ -76,11 +76,20 @@ def init_temporal_graph(dat, bins):
         TG.read_gpickles(TG_FRAME_PATH)
     else:
         # create the parent folder, along with any intermediate folders
+        # NOTE: this functionality is repeated in TemporalGraph
         os.makedirs(TG_FRAME_PATH, exist_ok=True)
+        
         # this loop takes about 3 minutes
-        for i in tqdm(range(len(bins) - 1), dynamic_ncols=True):
+        bin_dat = dat[dat.InvoiceDate < bins[0]]
+        frame = create_frame(bin_dat)
+        TG.add_frame(dat.InvoiceDate.min(), frame)
+        
+        for i in tqdm(range(len(bins)), dynamic_ncols=True):
             start = bins[i]
-            end = bins[i+1]
+            if i+1 == len(bins):
+                end = dat.InvoiceDate.max()
+            else:
+                end = bins[i+1] + 1 # will trigger a warning, ignore
             bin_dat = dat[(dat.InvoiceDate >= start) & (dat.InvoiceDate < end)]
             frame = create_frame(bin_dat)
             TG.add_frame(start, frame)
