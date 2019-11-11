@@ -150,7 +150,7 @@ def normalize_rows(A):
     norm[norm == 0] = 1.0
     return A / norm
 
-def calc_prec(predictions, customerIDs, node2idx, TG, bins, ratio):
+def calc_prec(adj, customerIDs, node2idx, TG, bins, ratio):
     '''
     Calculate a very coarse precision metric for precision.
         We only consider 'valid' customers that bought at least 1 item:
@@ -166,15 +166,29 @@ def calc_prec(predictions, customerIDs, node2idx, TG, bins, ratio):
         for cID in customerIDs:
             if cur_graph.has_node(cID):
                 if cID not in customer_map:
-                    customer_map[cID] = set()
+                    customer_map[cID] = dict()
                 for sc in cur_graph.neighbors(cID):
-                    customer_map[cID].add(node2idx[sc])
+                    scIdx = node2idx[sc]
+                    if scIdx not in customer_map[cID]:
+                        customer_map[cID][scIdx] = 0
+                    customer_map[cID][scIdx] += 1
 
     total_purchased = len(customer_map)
     correct = 0
-    for i, pred in enumerate(predictions):
+    # map from cID to total_precision
+    customer_prec = dict()
+    for i in range(len(customerIDs)):
+        customer_total = 0
+        correct_total = 0
         cID = customerIDs[i]
-        if cID in customer_map and pred in customer_map[cID]:
-            correct += 1
+        probs = adj[i, :]
+        if cID not in customer_map:
+            continue
+        purchase_dict = customer_map[cID]
+        for scIdx, pCount in purchase_dict.items():
+            customer_total += pCount
+            correct_total += (pCount * probs[scIdx])
+        if customer_total > 0:
+            customer_prec[cID] = (correct_total) / (customer_total)
 
-    return float(correct) / total_purchased
+    return customer_prec

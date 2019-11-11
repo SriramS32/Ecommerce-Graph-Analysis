@@ -77,7 +77,7 @@ def gen_transition(G, stockCodes, node2idx):
     mapped_pairs = set()
 
     for purchase_record in customer_map.values():
-        # every sorted combination of items
+        # every sorted combination of items purchased by each customer
         for itemA, itemB in combinations(purchase_record, r=2):
             if (itemA, itemB) in mapped_pairs:
                 continue
@@ -92,8 +92,8 @@ def gen_transition(G, stockCodes, node2idx):
             idxA = node2idx[itemA]
             idxB = node2idx[itemB]
 
-            T[idxA, idxB] = probB
-            T[idxB, idxA] = probA
+            T[idxA, idxB] = probA
+            T[idxB, idxA] = probB
 
     for sCode in stockCodes:
         # all diagonals are 1.0
@@ -133,12 +133,17 @@ if __name__ == '__main__':
         adj = normalize_rows(np.matmul(adj, T))
     print('Done!')
 
-    predicted_purchases = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
+    # predicted_purchases = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
     # turns out, everyone's gonna buy birthday cards and christmas lights
 
     # now, calclulate precision!
     # scheme: (true positives / (true positive + true negative))
     print('Calculating precision...')
-    final_prec = calc_prec(predicted_purchases, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
+    prec_dict = calc_prec(adj, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
     print('Done!')
-    print('Final precision: %.f' % final_prec)
+    avg_prec = np.mean([x for x in prec_dict.values()])
+    print('Average customer precision: %f' % avg_prec)
+    # average precision: 0.018747071735931934
+    # median precision: 0.019954884755429024
+    # best precision: 0.12178155639214931
+    # worst precision: 0.0

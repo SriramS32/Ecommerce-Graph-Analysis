@@ -57,7 +57,7 @@ if __name__ == '__main__':
     probs = nx.preferential_attachment(partial_graph, pairs)
     print('Processing predictions...')
     # RAI takes about 12 minutes for me, 9,933,917 items w/ 0.8 ratio
-    # Preferential attachment takes < 1 minutes
+    # Preferential attachment takes < 1 minute
     for u, v, p in tqdm(probs, dynamic_ncols=True):
         i = node2idx[u]
         j = node2idx[v]
@@ -65,8 +65,9 @@ if __name__ == '__main__':
     print('Done!')
 
     adj = normalize_rows(adj)
-    preds = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
+    # preds = [np.argmax(adj[i, :]) for i in range(len(customerIDs))]
 
-    final_prec = calc_prec(preds, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
-    print('Final accuracy = %.4f' % final_prec)
+    prec_dict = calc_prec(adj, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
+    avg_prec = np.mean([x for x in prec_dict.values()])
+    print('Average customer precision = %.4f' % avg_prec)
         
