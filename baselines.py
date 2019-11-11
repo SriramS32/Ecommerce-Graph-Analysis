@@ -6,8 +6,11 @@ from utils import *
 from math import floor
 from tqdm import tqdm
 from itertools import combinations
+from sklearn.manifold import SpectralEmbedding
 
 TRAIN_SPLIT = 0.8
+# METHOD = 'PA'
+METHOD = 'WIC'
 
 def gen_partial_graph(TG, bins, r=0.8):
     '''
@@ -45,6 +48,7 @@ if __name__ == '__main__':
     print('Generating customer/product pairs...')
     # takes about 11 seconds on my computer
     for cID in tqdm(customerIDs, dynamic_ncols=True):
+        # only predict on nodes that have purchase history
         if not partial_graph.has_node(cID):
             continue
         for sc in stockCodes:
@@ -54,10 +58,24 @@ if __name__ == '__main__':
                 pairs.append((cID, sc))
     print('Done!')
     adj = np.zeros((C,P))
-    probs = nx.preferential_attachment(partial_graph, pairs)
+
+    if METHOD == 'PA':
+        probs = nx.preferential_attachment(partial_graph, pairs)
+    else:
+        model = SpectralEmbedding(n_components=2, affinity='precomputed',
+                                  random_state=42, n_neighbors=None,
+                                  n_jobs=None)
+        g_adj = nx.linalg.adjacency_matrix(partial_graph)
+        embedding = model.fit_transform(g_adj.toarray())
+        cluster = np.argmax(embedding, axis=1)
+        for i, node in enumerate(partial_graph.nodes):
+            partial_graph.nodes[node]['community'] = cluster[i]
+        probs = nx.within_inter_cluster(partial_graph, pairs)
+
     print('Processing predictions...')
     # RAI takes about 12 minutes for me, 9,933,917 items w/ 0.8 ratio
     # Preferential attachment takes < 1 minute
+    # within inter cluster takes 14 minutes
     for u, v, p in tqdm(probs, dynamic_ncols=True):
         i = node2idx[u]
         j = node2idx[v]
@@ -69,5 +87,5 @@ if __name__ == '__main__':
 
     prec_dict = calc_prec(adj, customerIDs, node2idx, TG, bins, TRAIN_SPLIT)
     avg_prec = np.mean([x for x in prec_dict.values()])
-    print('Average customer precision = %.4f' % avg_prec)
+    print('Average customer precision = %f' % avg_prec)
         
