@@ -6,7 +6,7 @@ from tqdm import tqdm
 from math import floor
 
 from temporal import TemporalGraph
-
+from sklearn.manifold import SpectralEmbedding, TSNE
 
 CSV_PATH = './data/online_retail_II.csv'
 TG_FRAME_PATH = './data/tg_frames'
@@ -141,6 +141,68 @@ def extract_codes(edge):
         stockCode = v
     return customerID, stockCode
 
+def gen_transition(G, stockCodes, node2idx):
+    '''
+    Generate a P x P transition matrix from the current graph,
+    according to the following scheme:
+       T_ii = 1
+       T_ij = 
+          - if i,j purchased together by at least one customer:
+               # co-purchases / # purchases of item j
+          - otherwise: 1/P
+    
+    Parameters:
+       - G: a nx.Graph of the transactions in the current time frame
+       - stockCodes: a list of customerIDs
+       - node2idx
+    '''
+
+    P = len(stockCodes)
+    initial_prob = 1.0 / P
+    T = np.ones((P,P)) * initial_prob
+
+    # map customerID -> purchased items
+    customer_map = dict()
+    # map purchased item -> customerIDs of purchased items
+    product_map = dict()
+
+    for edge in G.edges:
+        cID, sCode = extract_codes(edge)
+        if cID not in customer_map:
+            customer_map[cID] = set()
+        if sCode not in product_map:
+            product_map[sCode] = set()
+        customer_map[cID].add(sCode)
+        product_map[sCode].add(cID)
+
+    mapped_pairs = set()
+
+    for purchase_record in customer_map.values():
+        # every sorted combination of items purchased by each customer
+        for itemA, itemB in combinations(purchase_record, r=2):
+            if (itemA, itemB) in mapped_pairs:
+                continue
+            mapped_pairs.add((itemA, itemB))
+            setA = product_map[itemA]
+            setB = product_map[itemB]
+            intersection = len(setA.intersection(setB))
+
+            probA = float(intersection) / len(setA)
+            probB = float(intersection) / len(setB)
+
+            idxA = node2idx[itemA]
+            idxB = node2idx[itemB]
+
+            T[idxA, idxB] = probA
+            T[idxB, idxA] = probB
+
+    for sCode in stockCodes:
+        # all diagonals are 1.0
+        idx = node2idx[sCode]
+        T[idx, idx] = 1.0
+
+    return T
+
 def normalize_rows(A):
     '''
     normalize the rows of A
@@ -190,5 +252,36 @@ def calc_prec(adj, customerIDs, node2idx, TG, bins, ratio):
             correct_total += (pCount * probs[scIdx])
         if customer_total > 0:
             customer_prec[cID] = (correct_total) / (customer_total)
-
     return customer_prec
+
+def get_adj_matrix(G, node2idx, C, P):
+    adj = np.zeros((C+P, C+P))
+
+    for edge in G.edges:
+        cID, sCode = extract_codes(edge)
+        customer_idx, product_idx = node2idx[cID], node2idx[sCode]
+        adj[customer_idx, C+product_idx] = 1
+        adj[C+product_idx, customer_idx] = 1
+
+    return adj
+
+def tisne_embedding(G):
+    '''
+    Generates a TISNE embedding from the customer-product adjacency matrix
+    '''
+
+    raise Exception('Not implemented!')
+
+def get_spectral_embedding(G, stockCodes, node2idx, dim=8, seed=1):
+    '''
+    Generates a spectral embedding from the networkx graph
+       - embedding dimension of 8 is the fourth root of 4636 (length of stockCodes)
+          - TODO: try different embedding dimensions
+    '''
+    
+    # get the product adjacency matrix, won't be symmetric but will be converted to one
+    adj = gen_transition(G, stockCodes, node2idx)
+    
+    model = SpectralEmbedding(n_components=dim, affinity='precomputed', random_state=seed,
+                              n_neighbors=None, n_jobs=None)
+    return model.fit_transform(adj)

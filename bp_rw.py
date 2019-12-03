@@ -39,68 +39,6 @@ def init_adjacency_matrix(dat, TG, bins, frame_ratio=0.8):
             adj[customer_idx, product_idx] += 1
 
     return adj
-    
-def gen_transition(G, stockCodes, node2idx):
-    '''
-    Generate a P x P transition matrix from the current graph,
-    according to the following scheme:
-       T_ii = 1
-       T_ij = 
-          - if i,j purchased together by at least one customer:
-               # co-purchases / # purchases of item j
-          - otherwise: 1/P
-    
-    Parameters:
-       - G: a nx.Graph of the transactions in the current time frame
-       - stockCodes: a list of customerIDs
-       - node2idx
-    '''
-
-    P = len(stockCodes)
-    initial_prob = 1.0 / P
-    T = np.ones((P,P)) * initial_prob
-
-    # map customerID -> purchased items
-    customer_map = dict()
-    # map purchased item -> customerIDs of purchased items
-    product_map = dict()
-
-    for edge in G.edges:
-        cID, sCode = extract_codes(edge)
-        if cID not in customer_map:
-            customer_map[cID] = set()
-        if sCode not in product_map:
-            product_map[sCode] = set()
-        customer_map[cID].add(sCode)
-        product_map[sCode].add(cID)
-
-    mapped_pairs = set()
-
-    for purchase_record in customer_map.values():
-        # every sorted combination of items purchased by each customer
-        for itemA, itemB in combinations(purchase_record, r=2):
-            if (itemA, itemB) in mapped_pairs:
-                continue
-            mapped_pairs.add((itemA, itemB))
-            setA = product_map[itemA]
-            setB = product_map[itemB]
-            intersection = len(setA.intersection(setB))
-
-            probA = float(intersection) / len(setA)
-            probB = float(intersection) / len(setB)
-
-            idxA = node2idx[itemA]
-            idxB = node2idx[itemB]
-
-            T[idxA, idxB] = probA
-            T[idxB, idxA] = probB
-
-    for sCode in stockCodes:
-        # all diagonals are 1.0
-        idx = node2idx[sCode]
-        T[idx, idx] = 1.0
-
-    return T
 
 if __name__ == '__main__':
     dat = read_retail_csv()
