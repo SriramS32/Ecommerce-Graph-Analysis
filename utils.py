@@ -3,6 +3,7 @@ import numpy as np
 import networkx as nx
 import os
 from tqdm import tqdm
+from itertools import combinations
 from math import floor
 from temporal import TemporalGraph
 from sklearn.manifold import SpectralEmbedding, TSNE

@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,22 +12,36 @@ class GATEmbedding(nn.Module):
     def __init__():
         super(GATEmbedding, self).__init__()
 
-class TransformerModel(nn.Module):
+class EcommerceTransformer(nn.Module):
     '''
-    From the PyTorch transformer tutorial:
+    Largely from the PyTorch transformer tutorial:
     https://pytorch.org/tutorials/beginner/transformer_tutorial.html
     '''
 
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+    def __init__(self, C, P, ninp, nhead, nhid, nlayers, dropout=0.5, embedding=None):
+        '''
+        ntoken = size of vocab, C*P in this case
+        ninp = embedding dimension
+        nhid = size of hidden layers
+        nlayers 
+        '''
         super(TransformerModel, self).__init__()
         from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        ntoken = C * P
+        self.C = C
+        self.P = P
         self.model_type = 'Transformer'
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.encoder = nn.Embedding(ntoken, ninp)
+        if embedding is not None:
+            enc_weight = list(self.encoder.parameters())[0]
+            enc_weight.data = torch.from_numpy(embedding)
+            enc_weight.requires_grad = False
         self.ninp = ninp
+        # could replace decoder with the embedding layer as well
         self.decoder = nn.Linear(ninp, ntoken)
 
         self.init_weights()
