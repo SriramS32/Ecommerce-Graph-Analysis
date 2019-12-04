@@ -2,8 +2,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pyGAT.layers import GraphAttentionLayer, SpGraphAttentionLayer
-
 
 class GATEmbedding(nn.Module):
     '''
@@ -23,26 +21,28 @@ class EcommerceTransformer(nn.Module):
         ntoken = size of vocab, C*P in this case
         ninp = embedding dimension
         nhid = size of hidden layers
-        nlayers 
+        nlayers = number of encoder layers
         '''
-        super(TransformerModel, self).__init__()
+        super(EcommerceTransformer, self).__init__()
         from torch.nn import TransformerEncoder, TransformerEncoderLayer
         ntoken = C * P
         self.C = C
         self.P = P
         self.model_type = 'Transformer'
         self.src_mask = None
-        self.pos_encoder = PositionalEncoding(ninp, dropout)
-        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.pos_encoder = PositionalEncoding(C*ninp, dropout)
+        encoder_layers = TransformerEncoderLayer(C*ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.encoder = nn.Embedding(ntoken, ninp)
+        self.custom_embedding = False
         if embedding is not None:
-            enc_weight = list(self.encoder.parameters())[0]
-            enc_weight.data = torch.from_numpy(embedding)
-            enc_weight.requires_grad = False
+            self.custom_embedding = True
+            self.encoder = embedding
+        else:
+            self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
         # could replace decoder with the embedding layer as well
-        self.decoder = nn.Linear(ninp, ntoken)
+        # output: S x B x V, in our case V gives a customer embedding
+        self.decoder = nn.Linear(self.c * ninp, self.C * ninp)
 
         self.init_weights()
 
@@ -53,7 +53,8 @@ class EcommerceTransformer(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        self.encoder.weight.data.uniform_(-initrange, initrange)
+        if not self.custom_embedding:
+            self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
@@ -63,8 +64,13 @@ class EcommerceTransformer(nn.Module):
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
             self.src_mask = mask
 
-        # embedding, to be replaced
-        src = self.encoder(src) * math.sqrt(self.ninp)
+        if self.custom_embedding:
+            seq = src.shape[0]
+            batch = src.shape[1]
+            src = torch.matmul(src.view(seq, batch, self.C, self.P), self.encoder)
+            src = src.view(seq, batch, -1)
+        else:
+            src = self.encoder(src) * math.sqrt(self.ninp)
         # positional information
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)

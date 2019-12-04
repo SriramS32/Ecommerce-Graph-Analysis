@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
+import time
 from math import ceil, floor
 from utils import *
 from tgat import EcommerceTransformer
@@ -18,10 +19,16 @@ def batchify(data, C, P, bsz, device='cpu'):
     data = data.view(bsz, -1, C, P).transpose(0,1).contiguous()
     return data.to(device)
 
-def get_batch(source, i, embedding_matrix, bptt=4):
-    seq_len = min(bptt, len(source) - 1 - i)
+def get_batch(source, i, embedding_matrix, max_seq_len=4):
+    batch = source.shape[1]
+    P = embedding_matrix.shape[0]
+    
+    seq_len = min(max_seq_len, len(source) - 1 - i)
     data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].view(-1)
+    target_adj = source[i+1:i+1+seq_len]
+    norm_vec = 1 / torch.matmul(target_adj, torch.ones(P))
+    norm_vec = norm_vec.masked_fill(norm_vec == float('inf'), 0.0)
+    target = torch.matmul(target_adj, embedding_matrix) * norm_vec.view(seq_len, batch,-1,1)
     return data, target
 
 def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
@@ -29,6 +36,18 @@ def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
     Generate the embedding sequence from the temporal graph
     and the product embedding
     '''
+
+    print('Loading graph adjacency tensors...')
+
+    savepath = './data/adj_tensors'
+
+    if os.path.exists(savepath) and len(os.listdir(savepath)) == 3:
+        print('Found saved tensors, loading from tensors...')
+        train_split = torch.load(savepath + '/train.pt')
+        val_split = torch.load(savepath + '/val.pt')
+        test_split = torch.load(savepath + '/test.pt')
+        print('Done!')
+        return train_split, val_split, test_split
 
     whole_sequence = []
 
@@ -65,6 +84,15 @@ def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
         args.batch_size,
         device=args.device)
 
+    if not os.path.exists(savepath):
+        os.makedirs(savepath)
+    print('Saving tensors...')
+    torch.save(train_split, savepath + '/train.pt')
+    torch.save(val_split, savepath + '/val.pt')
+    torch.save(test_split, savepath + '/test.pt')
+
+    print('Done!')
+
     return train_split, val_split, test_split
 
 def train(model,
@@ -73,12 +101,16 @@ def train(model,
           embedding_matrix,
           criterion=nn.CrossEntropyLoss(),
           seq_length=4,
-          log_interval=20):
+          log_interval=20,
+          device='cpu'):
     model.train()
     total_loss = 0
     start_time = time.time()
-    for batch, i in enumerate(range(0, train_data.size(0)-1, bptt)):
-        src, target = get_batch(train_data, i, embedding_matrix, bptt=seq_length)
+    for batch, i in enumerate(range(0, train_data.size(0)-1, seq_length)):
+        src, target = get_batch(train_data, i, embedding_matrix, max_seq_len=seq_length)
+        if 'cuda' in device:
+            src.cuda()
+            target.cuda()
         optimizer.zero_grad()
         output = model(src)
         loss = criterion(output, target)
@@ -122,7 +154,7 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
                 emb = (emb_f(cur_graph, stockCodes, node2idx, embedding_dim, seed) / n )
             else:
                 emb = emb + ( emb_f(cur_graph, stockCodes, node2idx, embedding_dim, seed) / n )
-
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         np.save(filepath, emb)
     return emb
 
@@ -143,8 +175,13 @@ def main(args):
                                                 args.embedding_dim)
     trainset, valset, testset = split_data(args, bins, C, P, node2idx,
                                            TG, embedding_matrix)
-    model = EcommerceTransformer(P,
+    # convert to tensor to give to model
+    embedding_matrix = torch.FloatTensor(embedding_matrix)
+    
+    model = EcommerceTransformer(C,
+                                 P,
                                  args.embedding_dim,
+                                 args.num_heads,
                                  args.hidden,
                                  args.num_layers,
                                  embedding=embedding_matrix)
@@ -153,15 +190,17 @@ def main(args):
                            lr=args.lr,
                            weight_decay=args.weight_decay)
 
-    '''
+    if args.device == 'cuda':
+        model.cuda()
+        
     train(model,
           trainset,
           optimizer,
           embedding_matrix,
           criterion=nn.CrossEntropyLoss(),
           seq_length=args.seq,
-          log_interval=args.log_interval)
-    '''
+          log_interval=args.log_interval,
+          device=args.device)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -178,6 +217,8 @@ if __name__ == '__main__':
                         choices=['spectral', ''], help='Type of initial graph embedding to use')
     parser.add_argument('--embedding-dim', type=int, default=8,
                         help='Size of the initial embedding dimension')
+    parser.add_argument('--num-heads', type=int, default=8,
+                        help='Number of attention heads')
     parser.add_argument('--hidden', type=int, default=200,
                         help='Size of the network hidden layers')
     parser.add_argument('--num-layers', type=int, default=8,
@@ -190,4 +231,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
 
-    # main(args)
+    main(args)
