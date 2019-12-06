@@ -36,15 +36,22 @@ class EcommerceTransformer(nn.Module):
         self.custom_embedding = False
         if embedding is not None:
             self.custom_embedding = True
-            self.encoder = embedding
+            self.encoder = torch.FloatTensor(embedding)
         else:
             self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
         # could replace decoder with the embedding layer as well
         # output: S x B x V, in our case V gives a customer embedding
-        self.decoder = nn.Linear(self.c * ninp, self.C * ninp)
+        self.decoder = nn.Linear(self.C * ninp, self.C * ninp)
 
         self.init_weights()
+
+    def cuda(self):
+        super(EcommerceTransformer, self).cuda()
+        if self.custom_embedding:
+            self.encoder = self.encoder.cuda()
+        if self.src_mask is not None:
+            self.src_mask = self.src_mask.cuda()
 
     def _generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)

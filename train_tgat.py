@@ -7,7 +7,9 @@ import time
 from math import ceil, floor
 from utils import *
 from tgat import EcommerceTransformer
+from adj_dataset import AdjacencyMatrixDataset
 
+ADJ_SAVEPATH = './data/adj_tensors'
 EMBEDDINGS = {
     'spectral': get_spectral_embedding
 }
@@ -39,16 +41,6 @@ def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
 
     print('Loading graph adjacency tensors...')
 
-    savepath = './data/adj_tensors'
-
-    if os.path.exists(savepath) and len(os.listdir(savepath)) == 3:
-        print('Found saved tensors, loading from tensors...')
-        train_split = torch.load(savepath + '/train.pt')
-        val_split = torch.load(savepath + '/val.pt')
-        test_split = torch.load(savepath + '/test.pt')
-        print('Done!')
-        return train_split, val_split, test_split
-
     whole_sequence = []
 
     for date in bins[:-1]:
@@ -66,54 +58,79 @@ def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
     # S x C x P
     whole_sequence = whole_sequence
 
-    train_split = batchify(
-        torch.FloatTensor(whole_sequence[: floor(0.8 * len(bins))]),
-        C, P,
-        args.batch_size,
-        device=args.device
+    train_split = batchify(torch.FloatTensor(whole_sequence[: floor(0.8 * len(bins))]),
+                           C, P,
+                           args.batch_size,
+                           device=args.device
     )
-    val_split = batchify(
-        torch.FloatTensor(whole_sequence[len(train_split):floor(0.9 * len(bins))]),
-        C, P,
-        args.batch_size,
-        device=args.device
-    )
-    test_split = batchify(
-        torch.FloatTensor(whole_sequence[len(train_split) + len(val_split) : ]),
-        C, P,
-        args.batch_size,
-        device=args.device)
 
-    if not os.path.exists(savepath):
-        os.makedirs(savepath)
+    val_split = batchify(torch.FloatTensor(whole_sequence[len(train_split):floor(0.9 * len(bins))]),
+                         C,P,
+                         args.batch_size,
+                         device=args.device
+    )
+    test_split = batchify(torch.FloatTensor(whole_sequence[len(train_split) + len(val_split) : ]),
+                          C, P,
+                          args.batch_size,
+                          device=args.device
+    )
+
+    if not os.path.exists(ADJ_SAVEPATH):
+        os.makedirs(ADJ_SAVEPATH)
     print('Saving tensors...')
-    torch.save(train_split, savepath + '/train.pt')
-    torch.save(val_split, savepath + '/val.pt')
-    torch.save(test_split, savepath + '/test.pt')
+    torch.save(train_split, ADJ_SAVEPATH + '/train.pt')
+    torch.save(val_split, ADJ_SAVEPATH + '/val.pt')
+    torch.save(test_split, ADJ_SAVEPATH + '/test.pt')
 
     print('Done!')
 
     return train_split, val_split, test_split
 
+def build_dataset(src_tensor, batch_size, seq_len):
+    '''
+    creates a torch.utils.data.Dataset of (src, target) pairs from a tensor
+    - tensor has shape N x B x C x P
+        - N = number of batches
+        - B = batch size
+        - C x P = size of adjacency matrix
+    '''
+
+    srcs = []
+    targets = []
+
+    N = src_tensor.shape[0]
+
+    for i in range(N-seq_len-1):
+        src = src_tensor[i:i+seq_len,:,:,:]
+        target = src_tensor[(i+1):(i+seq_len+1),:,:,:]
+        srcs.append(src)
+        targets.append(target)
+
+    return AdjacencyMatrixDataset(srcs, targets)
+    
+
 def train(model,
-          train_data,
+          trainloader,
           optimizer,
           embedding_matrix,
-          criterion=nn.CrossEntropyLoss(),
+          criterion=nn.MSELoss(),
           seq_length=4,
           log_interval=20,
           device='cpu'):
     model.train()
     total_loss = 0
     start_time = time.time()
-    for batch, i in enumerate(range(0, train_data.size(0)-1, seq_length)):
-        src, target = get_batch(train_data, i, embedding_matrix, max_seq_len=seq_length)
+    for i, (src, target) in enumerate(trainloader):
         if 'cuda' in device:
-            src.cuda()
-            target.cuda()
+            src = src.cuda()
+            target = target.cuda()
         optimizer.zero_grad()
-        output = model(src)
-        loss = criterion(output, target)
+        output = model(src[0])
+        # need to create target output from the target sequence
+        output = output.view(seq_length, output.shape[1],
+                             output.shape[2], embedding_matrix.shape[1])
+        target_emb = torch.matmul(target[0], embedding_matrix)
+        loss = criterion(output, target_emb)
         loss.backward()
         # try not to use grad clipping
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -173,11 +190,8 @@ def main(args):
     embedding_matrix = gen_embedding_matrix(bins, TG, stockCodes, node2idx,
                                                 args.embedding_type,
                                                 args.embedding_dim)
-    trainset, valset, testset = split_data(args, bins, C, P, node2idx,
-                                           TG, embedding_matrix)
-    # convert to tensor to give to model
-    embedding_matrix = torch.FloatTensor(embedding_matrix)
-    
+
+    # create the model
     model = EcommerceTransformer(C,
                                  P,
                                  args.embedding_dim,
@@ -190,14 +204,40 @@ def main(args):
                            lr=args.lr,
                            weight_decay=args.weight_decay)
 
-    if args.device == 'cuda':
+    if 'cuda' in args.device:
         model.cuda()
+    
+    # create the dataset
+    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
+        print('Found saved tensors, loading from tensors...')
+        trainset = torch.load(ADJ_SAVEPATH + '/train.pt')
+        # valset = torch.load(ADJ_SAVEPATH + '/val.pt')
+        # testset = torch.load(ADJ_SAVEPATH + '/test.pt')
+    else:
+        trainset, valset, testset = split_data(args, bins, C, P, node2idx,
+                                           TG, embedding_matrix)
+        # remove unnecessary splits to save memory for now
+        # | we will retrieve them later from their savepath
+        del valset
+        del testset
+
+    trainset = build_dataset(trainset, args.batch_size, args.seq)
+    # splits are already split into batches
+    trainloader = torch.utils.data.DataLoader(trainset,
+                                              num_workers=args.num_workers,
+                                              pin_memory=True)
+    
+    # convert to tensor to give to model
+    embedding_matrix = torch.FloatTensor(embedding_matrix)
+    if 'cuda' in args.device:
+        embedding_matrix = embedding_matrix.cuda()
+        
         
     train(model,
-          trainset,
+          trainloader,
           optimizer,
           embedding_matrix,
-          criterion=nn.CrossEntropyLoss(),
+          criterion=nn.MSELoss(),
           seq_length=args.seq,
           log_interval=args.log_interval,
           device=args.device)
@@ -227,6 +267,8 @@ if __name__ == '__main__':
                         help='Sequence length')
     parser.add_argument('--log-interval', type=int, default=20,
                         help='Period over which to log training results')
+    parser.add_argument('--num-workers', type=int, default=8,
+                        help='Number of dataloader workers')
 
     args = parser.parse_args()
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
