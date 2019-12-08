@@ -300,10 +300,12 @@ def main(args):
     savepath = os.path.join(MODEL_SAVEPATH,
                             'b%d_s%d_h%d_l%d_hid%d.pt' %
                             (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden))
+    if not os.path.exists(MODEL_SAVEPATH):
+        os.makedirs(MODEL_SAVEPATH)
     torch.save({
         'epoch': args.epochs,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer_state_dict()
+        'optimizer_state_dict': optimizer.state_dict()
     }, savepath)
 
     print('Saved to `%s`, done!' % savepath)
