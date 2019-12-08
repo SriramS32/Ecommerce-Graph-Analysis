@@ -9,7 +9,11 @@ from utils import *
 from tgat import EcommerceTransformer
 from adj_dataset import AdjacencyMatrixDataset
 
+# profiling tools
+from pytorch_memlab import profile, MemReporter
+
 ADJ_SAVEPATH = './data/adj_tensors'
+MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
     'spectral': get_spectral_embedding
 }
@@ -108,10 +112,10 @@ def build_dataset(src_tensor, batch_size, seq_len):
 
     return AdjacencyMatrixDataset(srcs, targets)
     
-
 def train(model,
           trainloader,
           optimizer,
+          epochs,
           embedding_matrix,
           criterion=nn.MSELoss(),
           seq_length=4,
@@ -120,36 +124,80 @@ def train(model,
     model.train()
     total_loss = 0
     start_time = time.time()
-    for i, (src, target) in enumerate(trainloader):
-        if 'cuda' in device:
-            src = src.cuda()
-            target = target.cuda()
-        optimizer.zero_grad()
-        output = model(src[0])
-        # need to create target output from the target sequence
-        output = output.view(seq_length, output.shape[1],
-                             output.shape[2], embedding_matrix.shape[1])
-        target_emb = torch.matmul(target[0], embedding_matrix)
-        loss = criterion(output, target_emb)
-        loss.backward()
-        # try not to use grad clipping
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-        optimizer.step()
+    for epoch in range(epochs):
+        for i, (src, target) in enumerate(trainloader):
+            if 'cuda' in device:
+                src = src.cuda()
+                target_emb = torch.matmul(target[0].cuda(), embedding_matrix)
+            optimizer.zero_grad()
+            output = model(src[0])
+            # need to create target output from the target sequence
+            output = output.view(seq_length, output.shape[1],
+                                 output.shape[2], embedding_matrix.shape[1])
+        
+            loss = criterion(output, target_emb)
+            loss.backward()
+            # try not to use grad clipping
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
 
-        total_loss += loss.item()
-        if i % log_interval == 0 and i > 0:
-            avg_loss = total_loss / log_interval
-            elapsed = time.time() - start_time
-            print('| epoch {:3d} | {:5d}/{:5d} batches |'
-                  'ms/batch {:5.2f} |'
-                  'avg loss {:5.2f}'.format(
-                      epoch,
-                      i, len(srcs),
-                      elapsed * 1000 / log_interval,
-                      avg_loss
-                  ))
-            total_loss = 0
-            start_time = time.time()
+            total_loss += loss.item()
+            if i % log_interval == 0 and i > 0:
+                avg_loss = total_loss / log_interval
+                elapsed = time.time() - start_time
+                print('| epoch {:3d} | {:5d}/{:5d} batches |'
+                      'ms/batch {:5.2f} |'
+                      'avg loss {:5.2f}'.format(
+                          epoch,
+                          i, len(trainloader),
+                          elapsed * 1000 / log_interval,
+                          avg_loss
+                      ))
+                total_loss = 0
+                start_time = time.time()
+
+def evaluate(model,
+             testloader,
+             embedding_matrix,
+             seq_length,
+             C, P,
+             device='cpu'):
+
+    # make predictions on each of the batches, generate a prediction matrix, and
+    # calculate average hit rate
+
+    totals = torch.zeros((C,P))
+    probs = torch.zeros((C,P))
+    model.eval()
+    with torch.no_grad():
+        for (src, target) in testloader:
+            totals += torch.sum(target[0], dim=[0,1])
+            if 'cuda' in device:
+                src = src.cuda()
+            # S x B x C x D
+            output = model(src[0])
+            preds = torch.matmul(output.unsqueeze(3), embedding_matrix.t())
+            # sigmoid, without all the baggage of the torch function
+            preds = 1 / (1 + torch.exp(preds))
+            if 'cuda' in device:
+                src = src.to('cpu')
+                target = target.cuda()
+            probs += torch.sum(preds * target[0], dim=[0,1]).to('cpu')
+
+    normalized = (probs / totals)
+    # if x is Nan, `x != x` == True, so we check for Nans here
+    normalized = normalized.masked_fill(normalized != normalized, 0)
+    normalized = torch.matmul(
+        normalized,
+        torch.ones((P,))
+    )
+
+    avg_acc = (torch.sum(normalized) / len(normalized)).item()
+
+    print('Avg accuracy = %.4f' % avg_acc)
+
+    return avg_acc
+        
 
 def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
                          embedding_type='spectral',
@@ -225,7 +273,7 @@ def main(args):
     # splits are already split into batches
     trainloader = torch.utils.data.DataLoader(trainset,
                                               num_workers=args.num_workers,
-                                              pin_memory=True)
+                                              pin_memory=False)
     
     # convert to tensor to give to model
     embedding_matrix = torch.FloatTensor(embedding_matrix)
@@ -236,11 +284,40 @@ def main(args):
     train(model,
           trainloader,
           optimizer,
+          args.epochs,
           embedding_matrix,
           criterion=nn.MSELoss(),
           seq_length=args.seq,
           log_interval=args.log_interval,
           device=args.device)
+
+    print('Finished training! Saving to file...')
+    # b = batch size
+    # s = seq length
+    # h = number of heads
+    # l = number of layers
+    # hid = hidden size
+    savepath = os.path.join(MODEL_SAVEPATH,
+                            'b%d_s%d_h%d_l%d_hid%d.pt' %
+                            (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden))
+    torch.save({
+        'epoch': args.epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer_state_dict()
+    }, savepath)
+
+    print('Saved to `%s`, done!' % savepath)
+
+    del trainloader
+    del trainset
+
+    valset = torch.load(ADJ_SAVEPATH  + '/val.pt')
+    valset = build_dataset(valset, args.batch_size, args.seq)
+    valloader = torch.utils.data.DataLoader(valset,
+                                            num_workers=args.num_workers,
+                                            pin_memory=False)
+
+    evaluate(model, valloader, embedding_matrix, args.seq, C, P, device=args.device)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
