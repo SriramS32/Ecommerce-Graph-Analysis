@@ -3,20 +3,27 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
+import pickle
 import time
 from math import ceil, floor
+from tqdm import tqdm
 from utils import *
 from tgat import EcommerceTransformer
 from adj_dataset import AdjacencyMatrixDataset
 
 # profiling tools
 from pytorch_memlab import profile, MemReporter
-
 ADJ_SAVEPATH = './data/adj_tensors'
 MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
     'spectral': get_spectral_embedding
 }
+
+def set_random_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def batchify(data, C, P, bsz, device='cpu'):
     nbatch = data.size(0) // bsz
@@ -37,7 +44,7 @@ def get_batch(source, i, embedding_matrix, max_seq_len=4):
     target = torch.matmul(target_adj, embedding_matrix) * norm_vec.view(seq_len, batch,-1,1)
     return data, target
 
-def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
+def split_data(args, bins, C, P, node2idx, TG):
     '''
     Generate the embedding sequence from the temporal graph
     and the product embedding
@@ -89,6 +96,26 @@ def split_data(args, bins, C, P, node2idx, TG, embedding_matrix):
     print('Done!')
 
     return train_split, val_split, test_split
+
+def get_split(args, bins, C, P, node2idx, TG, split='train'):
+
+    assert split in ['train', 'val', 'test']
+    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
+        return torch.load(os.path.join(ADJ_SAVEPATH, ('%s.pt' % split)))
+    else:
+        trainset, valset, testset = split_data(args, bins, C, P, node2idx, TG)
+        if split == 'train':
+            del valset
+            del testset
+            return trainset
+        elif split == 'valset':
+            del trainset
+            del testset
+            return valset
+        else:
+            del trainset
+            del valset
+            return testset
 
 def build_dataset(src_tensor, batch_size, seq_len):
     '''
@@ -166,37 +193,39 @@ def evaluate(model,
     # make predictions on each of the batches, generate a prediction matrix, and
     # calculate average hit rate
 
+    print('Evaluating...')
     totals = torch.zeros((C,P))
     probs = torch.zeros((C,P))
     model.eval()
     with torch.no_grad():
-        for (src, target) in testloader:
+        for (src, target) in tqdm(testloader):
             totals += torch.sum(target[0], dim=[0,1])
             if 'cuda' in device:
+                model.cuda()
                 src = src.cuda()
             # S x B x C x D
             output = model(src[0])
+            if 'cuda' in device:
+                # move it back to save memory
+                model.to('cpu')
+                src = src.to('cpu')
             preds = torch.matmul(output.unsqueeze(3), embedding_matrix.t())
             # sigmoid, without all the baggage of the torch function
-            preds = 1 / (1 + torch.exp(preds))
-            if 'cuda' in device:
-                src = src.to('cpu')
-                target = target.cuda()
-            probs += torch.sum(preds * target[0], dim=[0,1]).to('cpu')
+            preds = 1 / (1 + torch.exp(-preds.to('cpu')))
+            probs += torch.sum(preds * target[0], dim=[0,1])
 
-    normalized = (probs / totals)
+    # calculate prec the same way as for the rw baseline
+    correct_total = torch.matmul(probs, torch.ones((P,)))
+    customer_total = torch.matmul(totals, torch.ones((P,)))
+    customer_prec = correct_total / customer_total
     # if x is Nan, `x != x` == True, so we check for Nans here
-    normalized = normalized.masked_fill(normalized != normalized, 0)
-    normalized = torch.matmul(
-        normalized,
-        torch.ones((P,))
-    )
+    customer_prec = customer_prec.masked_fill(customer_prec != customer_prec, 0)
 
-    avg_acc = (torch.sum(normalized) / len(normalized)).item()
+    avg_prec = (torch.sum(customer_prec) / len(customer_prec)).item()
 
-    print('Avg accuracy = %.4f' % avg_acc)
+    print('Done! Avg precision = %.4f' % avg_prec)
 
-    return avg_acc
+    return avg_prec
         
 
 def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
@@ -224,6 +253,7 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
     return emb
 
 def main(args):
+    set_random_seed(args.seed)
     dat = read_retail_csv()
     bins = pd.date_range(start=dat.InvoiceDate.min(), end=dat.InvoiceDate.max(), freq='W')
     # keep only stock code and description, sort by stock code
@@ -240,12 +270,9 @@ def main(args):
                                                 args.embedding_dim)
 
     # create the model
-    model = EcommerceTransformer(C,
-                                 P,
-                                 args.embedding_dim,
-                                 args.num_heads,
-                                 args.hidden,
-                                 args.num_layers,
+    model_args = [C, P, args.embedding_dim, args.num_heads, args.hidden,
+                  args.num_layers]
+    model = EcommerceTransformer(*model_args,
                                  embedding=embedding_matrix)
 
     optimizer = optim.Adam(model.parameters(),
@@ -256,19 +283,7 @@ def main(args):
         model.cuda()
     
     # create the dataset
-    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
-        print('Found saved tensors, loading from tensors...')
-        trainset = torch.load(ADJ_SAVEPATH + '/train.pt')
-        # valset = torch.load(ADJ_SAVEPATH + '/val.pt')
-        # testset = torch.load(ADJ_SAVEPATH + '/test.pt')
-    else:
-        trainset, valset, testset = split_data(args, bins, C, P, node2idx,
-                                           TG, embedding_matrix)
-        # remove unnecessary splits to save memory for now
-        # | we will retrieve them later from their savepath
-        del valset
-        del testset
-
+    trainset = get_split(args, bins, C, P, node2idx, TG, split='train')
     trainset = build_dataset(trainset, args.batch_size, args.seq)
     # splits are already split into batches
     trainloader = torch.utils.data.DataLoader(trainset,
@@ -297,9 +312,10 @@ def main(args):
     # h = number of heads
     # l = number of layers
     # hid = hidden size
-    savepath = os.path.join(MODEL_SAVEPATH,
-                            'b%d_s%d_h%d_l%d_hid%d.pt' %
-                            (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden))
+    model_spec_str = 'b%d_s%d_h%d_l%d_hid%d' % \
+        (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden)
+    savepath = os.path.join(MODEL_SAVEPATH, model_spec_str + '.pt')
+    arg_path = os.path.join(MODEL_SAVEPATH, model_spec_str + '_ARGS.p')
     if not os.path.exists(MODEL_SAVEPATH):
         os.makedirs(MODEL_SAVEPATH)
     torch.save({
@@ -307,13 +323,14 @@ def main(args):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict()
     }, savepath)
-
+    with open(arg_path, 'w') as f:
+        pickle.dump(model_args, f)
     print('Saved to `%s`, done!' % savepath)
 
     del trainloader
     del trainset
 
-    valset = torch.load(ADJ_SAVEPATH  + '/val.pt')
+    valset = get_split(args, bins, C, P, node2idx, TG, split='val')
     valset = build_dataset(valset, args.batch_size, args.seq)
     valloader = torch.utils.data.DataLoader(valset,
                                             num_workers=args.num_workers,
@@ -346,7 +363,7 @@ if __name__ == '__main__':
                         help='Sequence length')
     parser.add_argument('--log-interval', type=int, default=20,
                         help='Period over which to log training results')
-    parser.add_argument('--num-workers', type=int, default=8,
+    parser.add_argument('--num-workers', type=int, default=0,
                         help='Number of dataloader workers')
 
     args = parser.parse_args()
