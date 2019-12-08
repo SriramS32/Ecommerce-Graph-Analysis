@@ -301,7 +301,7 @@ def main(args):
                             'b%d_s%d_h%d_l%d_hid%d.pt' %
                             (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden))
     torch.save({
-        'epoch': args.epoch,
+        'epoch': args.epochs,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer_state_dict()
     }, savepath)
