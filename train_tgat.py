@@ -98,6 +98,7 @@ def get_split(args, bins, C, P, node2idx, TG, split='train'):
         trainset, testset = split_data(args, bins, C, P, node2idx, TG)
         if split == 'train':
             del testset
+            return trainset
         else:
             del trainset
             return testset
