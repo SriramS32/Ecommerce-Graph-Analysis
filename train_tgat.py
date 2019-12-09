@@ -13,7 +13,7 @@ from adj_dataset import AdjacencyMatrixDataset
 
 # profiling tools
 from pytorch_memlab import profile, MemReporter
-ADJ_SAVEPATH = './data/adj_tensors'
+ADJ_SAVEPATH = './data/sparse_tensors'
 MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
     'spectral': get_spectral_embedding,
@@ -27,11 +27,40 @@ def set_random_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def sparse_narrow(data, nbatch, bsz):
+    idxs = data._indices()
+    vals = data._values()
+
+    valid_idxs = []
+    for i, timestep in enumerate(idxs[0]):
+        if timestep.item() < nbatch * bsz:
+            valid_idxs.append(i)
+
+    new_idxs = torch.LongTensor([[idxs[j, i].item() for j in range(3)] for i in valid_idxs])
+    new_vals = torch.FloatTensor([vals[i].item() for i in valid_idxs])
+    return torch.sparse.FloatTensor(new_idxs.t(), new_vals,
+                                    torch.Size([nbatch*bsz, data.size(1), data.size(2)]))
+
+def make_seqs(data, bsz):
+    seq_len = data.size(0)
+    per_dim = seq_len // bsz
+    idxs = data._indices()
+    seq_idxs = [x.item() for x in data._indices()[0,:]]
+    vals = data._values()
+
+    new_idxs = torch.LongTensor([[i // per_dim, i % per_dim] +
+                                 [idxs[j+1,i].item() for j in range(2)]
+                                 for i in seq_idxs])
+    return torch.sparse.FloatTensor(new_idxs.t(), vals,
+                                    torch.Size([bsz, per_dim, data.size(1), data.size(2)]))
+
 def batchify(data, C, P, bsz, device='cpu'):
     nbatch = data.size(0) // bsz
-    data = data.narrow(0, 0, nbatch * bsz)
+    # data = data.narrow(0, 0, nbatch * bsz)
+    data = sparse_narrow(data, nbatch, bsz)
     # S x B x C x P
-    data = data.view(bsz, -1, C, P).transpose(0,1).contiguous()
+    data = make_seqs(data, bsz)
+    data = data.transpose(0,1)
     return data.to(device)
 
 def get_batch(source, i, embedding_matrix, max_seq_len=4):
@@ -54,29 +83,52 @@ def split_data(args, bins, C, P, node2idx, TG):
 
     print('Loading graph adjacency tensors...')
 
-    whole_sequence = []
+    train_idxs = []
+    train_counts = []
+    test_idxs = []
+    test_counts = []
 
-    for date in bins[:-1]:
+    cutoff = floor(0.8 * len(bins))
+
+    for i, date in enumerate(bins[:-1]):
         date_key = str(date)
         cur_graph = TG.get_frame(date_key)
-        cur_adj = np.zeros((C,P))
+        edges = dict()
         for edge in cur_graph.edges:
             cID, sCode = extract_codes(edge)
-            customer_idx, product_idx = node2idx[cID], node2idx[sCode]
-            cur_adj[customer_idx, product_idx] += 1
+            coords = node2idx[cID], node2idx[sCode]
+            if coords in edges:
+                edges[coords] += 1
+            else:
+                edges[coords] = 1
 
-        # emb = np.matmul(cur_adj, embedding_matrix)
-        whole_sequence.append(cur_adj)
+        if len(edges) == 0:
+            continue
+        else:
+            if i < cutoff:
+                train_idxs.extend([[i] + list(coords) for coords, _ in edges.items()])
+                train_counts.extend([count for _, count in edges.items()])
+            else:
+                test_idxs.extend([[i-cutoff] + list(coords) for coords, _ in edges.items()])
+                test_counts.extend([count for _, count in edges.items()])
+
+    train_idxs = torch.LongTensor(train_idxs)
+    train_counts = torch.FloatTensor(train_counts)
+    train_split = torch.sparse.FloatTensor(train_idxs.t(), train_counts,
+                                           torch.Size([cutoff, C, P]))
+
+    test_idxs = torch.LongTensor(test_idxs)
+    test_counts = torch.FloatTensor(test_counts)
+    test_split = torch.sparse.FloatTensor(test_idxs.t(), test_counts,
+                                          torch.Size([len(bins) - cutoff, C, P]))
 
     # S x C x P
-    whole_sequence = whole_sequence
-
-    train_split = batchify(torch.FloatTensor(whole_sequence[: floor(0.8 * len(bins))]),
+    train_split = batchify(train_split,
                            C, P,
                            args.batch_size
     )
 
-    test_split = batchify(torch.FloatTensor(whole_sequence[len(train_split) : ]),
+    test_split = batchify(test_split,
                           C, P,
                           args.batch_size
     )
@@ -84,8 +136,10 @@ def split_data(args, bins, C, P, node2idx, TG):
     if not os.path.exists(ADJ_SAVEPATH):
         os.makedirs(ADJ_SAVEPATH)
     print('Saving tensors...')
-    torch.save(train_split, ADJ_SAVEPATH + '/train.pt')
-    torch.save(test_split, ADJ_SAVEPATH + '/test.pt')
+    torch.save(train_split._indices(), ADJ_SAVEPATH + '/train_indices.pt')
+    torch.save(train_split._values(), ADJ_SAVEPATH + '/train_values.pt')
+    torch.save(test_split._indices(), ADJ_SAVEPATH + '/test_indices.pt')
+    torch.save(test_split._values(), ADJ_SAVEPATH + '/test_values.pt')
 
     print('Done!')
 
@@ -93,8 +147,14 @@ def split_data(args, bins, C, P, node2idx, TG):
 
 def get_split(args, bins, C, P, node2idx, TG, split='train'):
     assert split in ['train', 'test']
-    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
-        return torch.load(os.path.join(ADJ_SAVEPATH, ('%s.pt' % split)))
+    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 4:
+        indices = torch.load(os.path.join(ADJ_SAVEPATH, ('%s_indices.pt' % split)))
+        values = torch.load(os.path.join(ADJ_SAVEPATH, ('%s_values.pt' % split)))
+        cutoff = floor(len(bins) * 0.8)
+        seq_len = cutoff // args.batch_size if split == 'train' \
+            else (len(bins) - cutoff) // args.batch_size
+        return torch.sparse.FloatTensor(indices, values,
+                                        torch.Size([seq_len, args.batch_size, C, P]))
     else:
         trainset, testset = split_data(args, bins, C, P, node2idx, TG)
         if split == 'train':
@@ -103,6 +163,23 @@ def get_split(args, bins, C, P, node2idx, TG, split='train'):
         else:
             del trainset
             return testset
+
+def narrow_slice(src, lb, ub):
+    idxs = src._indices()
+    vals = src._values()
+
+    valid_idxs = []
+    for i, timestep in enumerate(idxs[0]):
+        ts = timestep.item()
+        if lb <= ts and ts < ub:
+            valid_idxs.append(i)
+
+    new_idxs = torch.LongTensor([
+        [idxs[0, i] - lb] + [idxs[j+1, i].item() for j in range(3)] for i in valid_idxs
+    ])
+    new_vals = torch.FloatTensor([vals[i].item() for i in valid_idxs])
+    return torch.sparse.FloatTensor(new_idxs.t(), new_vals,
+                                    torch.Size([ub-lb, src.size(1), src.size(2), src.size(3)]))
 
 def build_dataset(src_tensor, batch_size, seq_len):
     '''
@@ -119,12 +196,24 @@ def build_dataset(src_tensor, batch_size, seq_len):
     N = src_tensor.shape[0]
 
     for i in range(N-seq_len-1):
-        src = src_tensor[i:i+seq_len,:,:,:]
-        target = src_tensor[(i+1):(i+seq_len+1),:,:,:]
+        src = narrow_slice(src_tensor, i, i+seq_len)
+        target = narrow_slice(src_tensor, i+1, i+seq_len+1)
+        src.coalesce()
+        target.coalesce()
         srcs.append(src)
         targets.append(target)
 
     return AdjacencyMatrixDataset(srcs, targets)
+
+def sparse_zero_index(t):
+    idxs = t._indices()
+    vals = t._values()
+
+    new_idxs = torch.LongTensor([
+        [coord[i+1] for i in range(4)]
+        for coord in idxs.t()])
+    return torch.sparse.FloatTensor(new_idxs.t(), vals,
+                                    t.shape[1:])
     
 def train(model,
           trainloader,
@@ -141,10 +230,11 @@ def train(model,
     for epoch in range(epochs):
         for i, (src, target) in enumerate(trainloader):
             if 'cuda' in device:
-                src = src.cuda()
-                target_emb = torch.matmul(target[0].cuda(), embedding_matrix)
+                src = sparse_zero_index(src).cuda()
+                target_emb = torch.matmul(sparse_zero_index(target).cuda().to_dense(),
+                                             embedding_matrix)
             optimizer.zero_grad()
-            output = model(src[0])
+            output = model(src)
             # need to create target output from the target sequence
             output = output.view(seq_length, output.shape[1],
                                  output.shape[2], embedding_matrix.shape[1])
@@ -186,12 +276,13 @@ def evaluate(model,
     model.eval()
     with torch.no_grad():
         for (src, target) in tqdm(testloader):
+            target = target.to_dense()
             totals += torch.sum(target[0], dim=[0,1])
             if 'cuda' in device:
                 model.cuda()
-                src = src.cuda()
+                src = sparse_zero_index(src).cuda()
             # S x B x C x D
-            output = model(src[0])
+            output = model(src)
             if 'cuda' in device:
                 # move it back to save memory
                 model.to('cpu')
