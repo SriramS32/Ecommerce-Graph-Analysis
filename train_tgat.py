@@ -236,8 +236,9 @@ def train(model,
             optimizer.zero_grad()
             output = model(src)
             # need to create target output from the target sequence
+            C = output.shape[2] // embedding_matrix.shape[1]
             output = output.view(seq_length, output.shape[1],
-                                 output.shape[2], embedding_matrix.shape[1])
+                                 C, embedding_matrix.shape[1])
         
             loss = criterion(output, target_emb)
             loss.backward()
@@ -287,7 +288,10 @@ def evaluate(model,
                 # move it back to save memory
                 model.to('cpu')
                 src = src.to('cpu')
-            preds = torch.matmul(output.unsqueeze(3), embedding_matrix.t())
+            C = output.shape[2] // embedding_matrix.shape[1]
+            output = output.view(seq_length, output.shape[1],
+                                 C, embedding_matrix.shape[1])
+            preds = torch.matmul(output, embedding_matrix.t())
             # sigmoid, without all the baggage of the torch function
             preds = 1 / (1 + torch.exp(-preds.to('cpu')))
             probs += torch.sum(preds * target[0], dim=[0,1])
@@ -312,7 +316,7 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
     n = len(bins)
     emb = None
     emb_f = EMBEDDINGS[embedding_type]
-    filepath = './data/product_embeddings/dim%d.npy' % embedding_dim
+    filepath = './data/product_embeddings/%s_dim%d.npy' % (embedding_type, embedding_dim)
 
     if emb_f is None:
         return None
@@ -393,8 +397,9 @@ def main(args):
     # h = number of heads
     # l = number of layers
     # hid = hidden size
-    model_spec_str = 'b%d_s%d_h%d_l%d_hid%d' % \
-        (args.batch_size, args.seq, args.num_heads, args.num_layers, args.hidden)
+    model_spec_str = '%s_b%d_s%d_h%d_l%d_hid%d' % \
+        (args.embedding_type, args.batch_size, args.seq,
+         args.num_heads, args.num_layers, args.hidden)
     savepath = os.path.join(MODEL_SAVEPATH, model_spec_str + '.pt')
     arg_path = os.path.join(MODEL_SAVEPATH, model_spec_str + '_ARGS.p')
     if not os.path.exists(MODEL_SAVEPATH):
