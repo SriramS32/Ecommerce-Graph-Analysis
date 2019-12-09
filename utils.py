@@ -282,7 +282,7 @@ def get_spectral_embedding(G, stockCodes, node2idx, dim=8):
     # get the product adjacency matrix, won't be symmetric but will be converted to one
     adj = gen_transition(G, stockCodes, node2idx)
     
-    model = SpectralEmbedding(n_components=dim, affinity='precomputed', random_state=seed,
+    model = SpectralEmbedding(n_components=dim, affinity='precomputed',
                               n_neighbors=None, n_jobs=None)
     return model.fit_transform(adj)
 

@@ -76,7 +76,7 @@ def split_data(args, bins, C, P, node2idx, TG):
                            args.batch_size
     )
 
-    test_split = batchify(torch.FloatTensor(whole_sequence[len(train_split) : ]),
+    test_split = batchify(torch.FloatTensor(whole_sequence[floor(0.8 * len(bins)) : ]),
                           C, P,
                           args.batch_size
     )
@@ -84,8 +84,8 @@ def split_data(args, bins, C, P, node2idx, TG):
     if not os.path.exists(ADJ_SAVEPATH):
         os.makedirs(ADJ_SAVEPATH)
     print('Saving tensors...')
-    torch.save(train_split, ADJ_SAVEPATH + '/train.pt')
-    torch.save(test_split, ADJ_SAVEPATH + '/test.pt')
+    torch.save(train_split, ADJ_SAVEPATH + '/batch%d_train.pt' % args.batch_size)
+    torch.save(test_split, ADJ_SAVEPATH + '/batch%d_test.pt' % args.batch_size)
 
     print('Done!')
 
@@ -93,8 +93,10 @@ def split_data(args, bins, C, P, node2idx, TG):
 
 def get_split(args, bins, C, P, node2idx, TG, split='train'):
     assert split in ['train', 'test']
-    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
-        return torch.load(os.path.join(ADJ_SAVEPATH, ('%s.pt' % split)))
+    loadpath = os.path.join(ADJ_SAVEPATH, ('batch%d_%s.pt' %
+                                           (args.batch_size,split)))
+    if os.path.exists(ADJ_SAVEPATH) and os.path.exists(loadpath):
+        return torch.load(loadpath)
     else:
         trainset, testset = split_data(args, bins, C, P, node2idx, TG)
         if split == 'train':
@@ -118,7 +120,7 @@ def build_dataset(src_tensor, batch_size, seq_len):
 
     N = src_tensor.shape[0]
 
-    for i in range(N-seq_len-1):
+    for i in range(N-seq_len):
         src = src_tensor[i:i+seq_len,:,:,:]
         target = src_tensor[(i+1):(i+seq_len+1),:,:,:]
         srcs.append(src)
@@ -221,7 +223,7 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
     n = len(bins)
     emb = None
     emb_f = EMBEDDINGS[embedding_type]
-    filepath = './data/product_embeddings/dim%d.npy' % embedding_dim
+    filepath = './data/product_embeddings/%s_dim%d.npy' % (embedding_type, embedding_dim)
 
     if emb_f is None:
         return None
@@ -360,3 +362,4 @@ if __name__ == '__main__':
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
 
     main(args)
+
