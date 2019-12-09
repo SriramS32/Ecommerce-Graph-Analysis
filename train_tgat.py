@@ -320,8 +320,8 @@ def main(args):
     del trainloader
     del trainset
 
-    testset = get_split(args, bins, C, P, node2idx, TG, split='val')
-    valset = build_dataset(testset, args.batch_size, args.seq)
+    testset = get_split(args, bins, C, P, node2idx, TG, split='test')
+    testset = build_dataset(testset, args.batch_size, args.seq)
     testloader = torch.utils.data.DataLoader(testset,
                                             num_workers=args.num_workers,
                                             pin_memory=False)
