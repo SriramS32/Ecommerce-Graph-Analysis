@@ -313,7 +313,7 @@ def main(args):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict()
     }, savepath)
-    with open(arg_path, 'w') as f:
+    with open(arg_path, 'wb') as f:
         pickle.dump(model_args, f)
     print('Saved to `%s`, done!' % savepath)
 
