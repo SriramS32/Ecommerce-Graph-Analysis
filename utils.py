@@ -272,7 +272,7 @@ def tisne_embedding(G):
 
     raise Exception('Not implemented!')
 
-def get_spectral_embedding(G, stockCodes, node2idx, dim=8, seed=1):
+def get_spectral_embedding(G, stockCodes, node2idx, dim=8):
     '''
     Generates a spectral embedding from the networkx graph
        - embedding dimension of 8 is the fourth root of 4636 (length of stockCodes)
@@ -285,3 +285,7 @@ def get_spectral_embedding(G, stockCodes, node2idx, dim=8, seed=1):
     model = SpectralEmbedding(n_components=dim, affinity='precomputed', random_state=seed,
                               n_neighbors=None, n_jobs=None)
     return model.fit_transform(adj)
+
+def get_random_embedding(G, stockCodes, node2idx, dim=8):
+    C = len(stockCodes)
+    return np.random.random((C, dim))

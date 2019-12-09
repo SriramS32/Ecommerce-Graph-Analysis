@@ -17,7 +17,8 @@ ADJ_SAVEPATH = './data/adj_tensors'
 MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
     'spectral': get_spectral_embedding,
-    'learned': None
+    'learned': None,
+    'random': get_random_embedding
 }
 
 def set_random_seed(seed):
@@ -216,8 +217,7 @@ def evaluate(model,
 
 def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
                          embedding_type='spectral',
-                         embedding_dim=8,
-                         seed=1):
+                         embedding_dim=8):
     n = len(bins)
     emb = None
     emb_f = EMBEDDINGS[embedding_type]
@@ -234,9 +234,9 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
             date_key = str(date)
             cur_graph = TG.get_frame(date_key)
             if emb is None:
-                emb = (emb_f(cur_graph, stockCodes, node2idx, embedding_dim, seed) / n )
+                emb = (emb_f(cur_graph, stockCodes, node2idx, embedding_dim) / n )
             else:
-                emb = emb + ( emb_f(cur_graph, stockCodes, node2idx, embedding_dim, seed) / n )
+                emb = emb + ( emb_f(cur_graph, stockCodes, node2idx, embedding_dim) / n )
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         np.save(filepath, emb)
     return emb
@@ -340,7 +340,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', type=str, default='cpu',
                         choices=['cpu','cuda'],help='Device to run on')
     parser.add_argument('--embedding-type', type=str, default='spectral',
-                        choices=['spectral', ''], help='Type of initial graph embedding to use')
+                        choices=['spectral', 'random', 'learned'], help='Type of initial graph embedding to use')
     parser.add_argument('--embedding-dim', type=int, default=8,
                         help='Size of the initial embedding dimension')
     parser.add_argument('--num-heads', type=int, default=8,
