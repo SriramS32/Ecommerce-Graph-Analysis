@@ -38,10 +38,10 @@ def main(args):
     model.load_state_dict(ckpt['model_state_dict'])
     print('Done!')
 
-    print('Loading validation set...')
-    valset = get_split(args, bins, C, P, node2idx, TG, split='val')
-    valset = build_dataset(valset, args.batch_size, args.seq)
-    valloader = torch.utils.data.DataLoader(valset,
+    print('Loading test set...')
+    testset = get_split(args, bins, C, P, node2idx, TG, split='test')
+    testset = build_dataset(testset, args.batch_size, args.seq)
+    testloader = torch.utils.data.DataLoader(testset,
                                             num_workers=args.num_workers,
                                             pin_memory=False)
     print('Done!')
@@ -50,7 +50,7 @@ def main(args):
     if 'cuda' in args.device:
         embedding_matrix = embedding_matrix.cuda()
 
-    evaluate(model, valloader, embedding_matrix, args.seq,
+    evaluate(model, testloader, embedding_matrix, args.seq,
              C, P, device=args.device)
 
     

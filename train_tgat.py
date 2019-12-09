@@ -16,7 +16,8 @@ from pytorch_memlab import profile, MemReporter
 ADJ_SAVEPATH = './data/adj_tensors'
 MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
-    'spectral': get_spectral_embedding
+    'spectral': get_spectral_embedding,
+    'learned': None
 }
 
 def set_random_seed(seed):
@@ -71,50 +72,34 @@ def split_data(args, bins, C, P, node2idx, TG):
 
     train_split = batchify(torch.FloatTensor(whole_sequence[: floor(0.8 * len(bins))]),
                            C, P,
-                           args.batch_size,
-                           device=args.device
+                           args.batch_size
     )
 
-    val_split = batchify(torch.FloatTensor(whole_sequence[len(train_split):floor(0.9 * len(bins))]),
-                         C,P,
-                         args.batch_size,
-                         device=args.device
-    )
-    test_split = batchify(torch.FloatTensor(whole_sequence[len(train_split) + len(val_split) : ]),
+    test_split = batchify(torch.FloatTensor(whole_sequence[len(train_split) : ]),
                           C, P,
-                          args.batch_size,
-                          device=args.device
+                          args.batch_size
     )
 
     if not os.path.exists(ADJ_SAVEPATH):
         os.makedirs(ADJ_SAVEPATH)
     print('Saving tensors...')
     torch.save(train_split, ADJ_SAVEPATH + '/train.pt')
-    torch.save(val_split, ADJ_SAVEPATH + '/val.pt')
     torch.save(test_split, ADJ_SAVEPATH + '/test.pt')
 
     print('Done!')
 
-    return train_split, val_split, test_split
+    return train_split, test_split
 
 def get_split(args, bins, C, P, node2idx, TG, split='train'):
-
-    assert split in ['train', 'val', 'test']
+    assert split in ['train', 'test']
     if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 3:
         return torch.load(os.path.join(ADJ_SAVEPATH, ('%s.pt' % split)))
     else:
-        trainset, valset, testset = split_data(args, bins, C, P, node2idx, TG)
+        trainset, testset = split_data(args, bins, C, P, node2idx, TG)
         if split == 'train':
-            del valset
             del testset
-            return trainset
-        elif split == 'valset':
-            del trainset
-            del testset
-            return valset
         else:
             del trainset
-            del valset
             return testset
 
 def build_dataset(src_tensor, batch_size, seq_len):
@@ -237,6 +222,9 @@ def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
     emb_f = EMBEDDINGS[embedding_type]
     filepath = './data/product_embeddings/dim%d.npy' % embedding_dim
 
+    if emb_f is None:
+        return None
+
     if os.path.exists(filepath):
         emb = np.load(filepath)
     else:
@@ -291,9 +279,10 @@ def main(args):
                                               pin_memory=False)
     
     # convert to tensor to give to model
-    embedding_matrix = torch.FloatTensor(embedding_matrix)
-    if 'cuda' in args.device:
-        embedding_matrix = embedding_matrix.cuda()
+    if embedding_matrix is not None:
+        embedding_matrix = torch.FloatTensor(embedding_matrix)
+        if 'cuda' in args.device:
+            embedding_matrix = embedding_matrix.cuda()
         
         
     train(model,
@@ -330,13 +319,13 @@ def main(args):
     del trainloader
     del trainset
 
-    valset = get_split(args, bins, C, P, node2idx, TG, split='val')
-    valset = build_dataset(valset, args.batch_size, args.seq)
-    valloader = torch.utils.data.DataLoader(valset,
+    testset = get_split(args, bins, C, P, node2idx, TG, split='val')
+    valset = build_dataset(testset, args.batch_size, args.seq)
+    testloader = torch.utils.data.DataLoader(testset,
                                             num_workers=args.num_workers,
                                             pin_memory=False)
 
-    evaluate(model, valloader, embedding_matrix, args.seq, C, P, device=args.device)
+    evaluate(model, testloader, embedding_matrix, args.seq, C, P, device=args.device)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
