@@ -71,3 +71,4 @@ if __name__ == '__main__':
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
 
     main(args)
+

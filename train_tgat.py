@@ -136,20 +136,32 @@ def split_data(args, bins, C, P, node2idx, TG):
     if not os.path.exists(ADJ_SAVEPATH):
         os.makedirs(ADJ_SAVEPATH)
     print('Saving tensors...')
-    torch.save(train_split._indices(), ADJ_SAVEPATH + '/train_indices.pt')
-    torch.save(train_split._values(), ADJ_SAVEPATH + '/train_values.pt')
-    torch.save(test_split._indices(), ADJ_SAVEPATH + '/test_indices.pt')
-    torch.save(test_split._values(), ADJ_SAVEPATH + '/test_values.pt')
+    torch.save(train_split._indices(), ADJ_SAVEPATH + '/batch%d_train_indices.pt' % args.batch_size)
+    torch.save(train_split._values(), ADJ_SAVEPATH + '/batch%d_train_values.pt' % args.batch_size)
+    torch.save(test_split._indices(), ADJ_SAVEPATH + '/batch%d_test_indices.pt' % args.batch_size)
+    torch.save(test_split._values(), ADJ_SAVEPATH + '/batch%d_test_values.pt' % args.batch_size)
 
     print('Done!')
 
     return train_split, test_split
 
+def path_ok(bsz):
+    check1 = os.path.exists(ADJ_SAVEPATH)
+    if not check1:
+        return False
+    check2 = os.path.exists(ADJ_SAVEPATH + '/batch%d_train_indices.pt' % bsz)
+    check3 = os.path.exists(ADJ_SAVEPATH + '/batch%d_test_indices.pt' % bsz)
+    check4 = os.path.exists(ADJ_SAVEPATH + '/batch%d_train_values.pt' % bsz)
+    check5 = os.path.exists(ADJ_SAVEPATH + '/batch%d_test_values.pt' % bsz)
+    return check2 and check3 and check4 and check5
+
 def get_split(args, bins, C, P, node2idx, TG, split='train'):
     assert split in ['train', 'test']
-    if os.path.exists(ADJ_SAVEPATH) and len(os.listdir(ADJ_SAVEPATH)) == 4:
-        indices = torch.load(os.path.join(ADJ_SAVEPATH, ('%s_indices.pt' % split)))
-        values = torch.load(os.path.join(ADJ_SAVEPATH, ('%s_values.pt' % split)))
+    if path_ok(args.batch_size):
+        indices = torch.load(os.path.join(ADJ_SAVEPATH, ('batch%d_%s_indices.pt' %
+                                                         (args.batch_size, split))))
+        values = torch.load(os.path.join(ADJ_SAVEPATH, ('batch%d_%s_values.pt' %
+                                                        (args.batch_size, split))))
         cutoff = floor(len(bins) * 0.8)
         seq_len = cutoff // args.batch_size if split == 'train' \
             else (len(bins) - cutoff) // args.batch_size
@@ -195,7 +207,7 @@ def build_dataset(src_tensor, batch_size, seq_len):
 
     N = src_tensor.shape[0]
 
-    for i in range(N-seq_len-1):
+    for i in range(N-seq_len):
         src = narrow_slice(src_tensor, i, i+seq_len)
         target = narrow_slice(src_tensor, i+1, i+seq_len+1)
         src.coalesce()
