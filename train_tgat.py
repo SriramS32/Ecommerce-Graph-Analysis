@@ -1,6 +1,7 @@
 import argparse
 import torch
 import torch.nn as nn
+import torch.utils.data
 import torch.optim as optim
 import pandas as pd
 import pickle
@@ -13,6 +14,7 @@ from adj_dataset import AdjacencyMatrixDataset
 
 # profiling tools
 from pytorch_memlab import profile, MemReporter
+
 ADJ_SAVEPATH = './data/adj_tensors'
 MODEL_SAVEPATH = './data/transformer_model'
 EMBEDDINGS = {
@@ -56,10 +58,16 @@ def split_data(args, bins, C, P, node2idx, TG):
 
     whole_sequence = []
 
+    cur_adj = np.zeros((C,P))
+    
+    print(TG.frames.keys())
     for date in bins[:-1]:
         date_key = str(date)
+        print(date_key)
         cur_graph = TG.get_frame(date_key)
-        cur_adj = np.zeros((C,P))
+        if args.use_snapshots:
+            cur_adj = np.zeros((C,P))
+        
         for edge in cur_graph.edges:
             cID, sCode = extract_codes(edge)
             customer_idx, product_idx = node2idx[cID], node2idx[sCode]
@@ -357,6 +365,8 @@ if __name__ == '__main__':
                         help='Period over which to log training results')
     parser.add_argument('--num-workers', type=int, default=0,
                         help='Number of dataloader workers')
+    parser.add_argument('--use_snapshots', type=bool, default=True,
+                        help='Whether to use snapshots (within-window) or cumulative (aggregated) time bins')
 
     args = parser.parse_args()
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
