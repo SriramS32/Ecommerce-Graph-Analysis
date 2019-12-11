@@ -1,4 +1,6 @@
-with open('loss_random_lay2.txt') as in_file:
+import sys
+
+with open(sys.argv[1]) as in_file:
     running_av = 0
     count = 0.0
     for line in in_file.readlines():
