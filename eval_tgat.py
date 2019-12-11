@@ -70,5 +70,51 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.device = 'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
 
-    main(args)
+    # main(args)
 
+    set_random_seed(args.seed)
+    dat = read_retail_csv()
+    bins = pd.date_range(start=dat.InvoiceDate.min(), end=dat.InvoiceDate.max(), freq='W')
+    duplicated = dat[['StockCode', 'Description']].drop_duplicates().sort_values('StockCode')
+    customerIDs, stockCodes, node2idx = gen_indices(dat)
+    C = len(customerIDs)
+    P = len(stockCodes)
+    TG = init_temporal_graph(dat, bins)
+
+    model_args_path = args.savepath.replace('.pt', '_ARGS.p')
+    with open(model_args_path, 'rb') as f:
+        model_args = pickle.load(f)
+
+    # only one for now
+    embedding_type = 'spectral'
+    embedding_dim = model_args[2]
+    
+    # embedding matrix : P x D
+    # right now just using spectral embedding of product transition matrix
+    embedding_matrix = gen_embedding_matrix(bins, TG, stockCodes, node2idx,
+                                                embedding_type,
+                                                embedding_dim)
+
+    print('Loading model...')
+    model = EcommerceTransformer(*model_args, embedding=embedding_matrix)
+    ckpt = torch.load(args.savepath)
+    model.load_state_dict(ckpt['model_state_dict'])
+    print('Done!')
+
+    print('Loading test set...')
+    testset = get_split(args, bins, C, P, node2idx, TG, split='test')
+    testset = build_dataset(testset, args.batch_size, args.seq)
+    testloader = torch.utils.data.DataLoader(testset,
+                                            num_workers=args.num_workers,
+                                            pin_memory=False)
+
+    trainset = get_split(args, bins, C, P, node2idx, TG, split='train')
+    trainset = build_dataset(trainset, args.batch_size, args.seq)
+    trainloader = torch.utils.data.DataLoader(trainset,
+                                              num_workers=args.num_workers,
+                                              pin_memory=False)
+    print('Done!')
+
+    embedding_matrix = torch.FloatTensor(embedding_matrix)
+    if 'cuda' in args.device:
+        embedding_matrix = embedding_matrix.cuda()

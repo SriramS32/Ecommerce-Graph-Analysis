@@ -279,14 +279,19 @@ def evaluate(model,
              seq_length,
              C, P,
              device='cpu'):
-
     # make predictions on each of the batches, generate a prediction matrix, and
     # calculate average hit rate
-
     print('Evaluating...')
     totals = torch.zeros((C,P))
     probs = torch.zeros((C,P))
+    # pseudo-inverse of the embedding
+    pinv = torch.matmul(embedding_matrix.t(),
+                            torch.inverse(torch.matmul(embedding_matrix, embedding_matrix.t())))
+    # save memory
+    embedding_matrix.to('cpu')
     model.eval()
+    loss = 0.0
+    criterion = nn.MSELoss()
     with torch.no_grad():
         for (src, target) in tqdm(testloader):
             target = target.to_dense()
@@ -300,27 +305,26 @@ def evaluate(model,
                 # move it back to save memory
                 model.to('cpu')
                 src = src.to('cpu')
-            C = output.shape[2] // embedding_matrix.shape[1]
-            output = output.view(seq_length, output.shape[1],
-                                 C, embedding_matrix.shape[1])
-            preds = torch.matmul(output, embedding_matrix.t())
-            # sigmoid, without all the baggage of the torch function
-            preds = 1 / (1 + torch.exp(-preds.to('cpu')))
+            preds = torch.matmul(output.unsqueeze(3), pinv)
+            preds = preds.to('cpu').sigmoid().softmax(dim=3)
             probs += torch.sum(preds * target[0], dim=[0,1])
-
     # calculate prec the same way as for the rw baseline
     correct_total = torch.matmul(probs, torch.ones((P,)))
     customer_total = torch.matmul(totals, torch.ones((P,)))
-    customer_prec = correct_total / customer_total
-    # if x is Nan, `x != x` == True, so we check for Nans here
-    customer_prec = customer_prec.masked_fill(customer_prec != customer_prec, 0)
-
-    avg_prec = (torch.sum(customer_prec) / len(customer_prec)).item()
-
+    # customer_prec = correct_total / customer_total
+    # # if x is Nan, `x != x` == True, so we check for Nans here
+    # customer_prec = customer_prec.masked_fill(customer_prec != customer_prec, 0)
+    # only average over the customers that actually bought something
+    bought_idxs = []
+    for i in range(len(customer_total)):
+        if customer_total[i].item() > 0.0:
+            bought_idxs.append(i)
+    precs = []
+    for idx in bought_idxs:
+        precs.append(correct_total[idx].item() / customer_total[idx].item())
+    avg_prec = sum(precs) / len(precs)
     print('Done! Avg precision = %.4f' % avg_prec)
-
     return avg_prec
-        
 
 def gen_embedding_matrix(bins, TG, stockCodes, node2idx,
                          embedding_type='spectral',
