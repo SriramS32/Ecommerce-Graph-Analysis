@@ -74,10 +74,10 @@ class EcommerceTransformer(nn.Module):
         if self.custom_embedding:
             seq = src.shape[0]
             batch = src.shape[1]
-            src = torch.matmul(src.view(seq, batch, self.C, self.P), self.encoder)
+            src = torch.matmul(src.to_dense(), self.encoder)
             src = src.view(seq, batch, -1)
         else:
-            src = self.encoder(src) * math.sqrt(self.ninp)
+            src = self.encoder(src.to_dense()) * math.sqrt(self.ninp)
         # positional information
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
